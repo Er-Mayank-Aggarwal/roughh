@@ -11,9 +11,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 DATA_PATH = os.path.join(BASE_DIR, "data", "diets.json")
 
 with open(DATA_PATH, "r", encoding="utf-8") as f:
-    DIETS_DATA = json.load(f)
-
-FOODS = DIETS_DATA["foods"]
+    FOODS = json.load(f)
 
 
 # USER
