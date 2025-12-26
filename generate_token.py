@@ -1,7 +1,7 @@
 import jwt
 
 token = jwt.encode(
-    {"email": "test@example.com"},
+    {"email": "tesst@example.com"},
     "supersecretkey123",
     algorithm="HS256"
 )

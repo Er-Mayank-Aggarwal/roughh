@@ -14,6 +14,7 @@ def update_intake(data: dict, request: Request):
 
 @router.get("/day")
 def day_intake(date: str, request: Request):
+    print(f"Fetching intake for date: {date}")
     return get_intake(request.state.user_email, date) or {"msg": "no data"}
 
 @router.get("/last-7-days")
@@ -22,4 +23,5 @@ def seven_days(request: Request):
 
 @router.get("/today")
 def today(request: Request):
+    print(f"Today's date in IST: {today}")
     return get_intake(request.state.user_email, today) or {"msg": "no data"}
