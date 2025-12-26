@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+pydantic
 pyjwt
 google-generativeai
-uvicorn
+python-multipart
