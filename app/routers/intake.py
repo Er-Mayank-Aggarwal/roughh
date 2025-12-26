@@ -1,8 +1,5 @@
 from fastapi import APIRouter, Request, Query
 from app.utils.helpers import get_ist_date_str
-
-today = get_ist_date_str()
-
 from app.db.crud import save_intake, get_intake, last_7_days
 
 router = APIRouter()
@@ -22,6 +19,11 @@ def seven_days(request: Request):
     return {"calories": last_7_days(request.state.user_email)}
 
 @router.get("/today")
-def today(request: Request):
-    print(f"Today's date in IST: {today}")
-    return get_intake(request.state.user_email, today) or {"msg": "no data"}
+def today_intake(request: Request):
+    today_date = get_ist_date_str()   # 👈 compute dynamically
+    print(f"Today's date in IST: {today_date}")
+
+    return (
+        get_intake(request.state.user_email, today_date)
+        or {"date": today_date, "msg": "no data"}
+    )
