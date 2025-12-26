@@ -4,10 +4,17 @@ USERS = {}
 JOURNEY = {}
 DAILY_INTAKE = {}
 FAVORITES = {}
-FOODS = [
-    {"id": 1, "name": "Idli", "p": 4, "c": 30, "f": 1, "cal": 150, "type": "solid", "category": "veg", "meal": "breakfast"},
-    {"id": 2, "name": "Dal", "p": 9, "c": 18, "f": 2, "cal": 120, "type": "liquid", "category": "veg", "meal": "lunch"},
-]
+import json
+import os
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+DATA_PATH = os.path.join(BASE_DIR, "data", "diets.json")
+
+with open(DATA_PATH, "r", encoding="utf-8") as f:
+    DIETS_DATA = json.load(f)
+
+FOODS = DIETS_DATA["foods"]
+
 
 # USER
 def save_user(email, data): USERS[email] = data
@@ -27,5 +34,18 @@ def add_fav(email, food):
         FAVORITES[email].append(food)
 
 # FOODS
-def get_foods(pref):
-    return FOODS
+def get_foods(food_preference: str):
+    """
+    food_preference: veg | nonveg | both | egg_only
+    """
+    if food_preference == "veg":
+        return [f for f in FOODS if f["category"] == "veg"]
+
+    if food_preference == "nonveg":
+        return [f for f in FOODS if f["category"] == "nonveg"]
+
+    if food_preference == "egg_only":
+        return [f for f in FOODS if f["category"] == "egg"]
+
+    return FOODS  # both
+
