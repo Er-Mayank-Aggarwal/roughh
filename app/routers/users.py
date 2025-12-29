@@ -7,6 +7,7 @@ router = APIRouter()
 
 @router.post("/profile")
 def user_profile(data: UserProfile, request: Request):
+    print("Received profile data:", data)
     save_user(request.state.user_email, data.dict())
     return {"msg": "Profile saved"}
 
