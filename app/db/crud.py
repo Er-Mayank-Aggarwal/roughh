@@ -145,3 +145,9 @@ def delete_today_intake_item(email, food_id):
     }
 
     return DAILY_INTAKE[key]
+
+def get_user_setup_status(email):
+    return {
+        "profile_completed": email in USERS,
+        "journey_completed": email in JOURNEY
+    }
