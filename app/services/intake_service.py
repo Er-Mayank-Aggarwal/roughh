@@ -1,4 +1,5 @@
 from app.services.food_service import get_food_by_id, calculate_item_macros
+from app.db.crud import delete_today_intake_item
 
 def process_intake_items(items):
     processed_items = []
@@ -21,3 +22,9 @@ def process_intake_items(items):
             totals[k] += calculated[k]
 
     return processed_items, totals
+
+
+
+def remove_food_from_day(email, date, food_id):
+    return delete_today_intake_item(email, food_id)
+

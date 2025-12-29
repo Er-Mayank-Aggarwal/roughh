@@ -2,6 +2,8 @@ import json
 import os
 from datetime import date
 
+from app.utils.helpers import get_ist_date_str
+
 # =========================
 # In-memory DBs
 # =========================
@@ -108,3 +110,38 @@ def get_food_by_id(food_id: int):
         if food["id"] == food_id:
             return food
     return None
+
+def delete_today_intake_item(email, food_id):
+    today = get_ist_date_str()
+    key = (email, today)
+
+    if key not in DAILY_INTAKE:
+        return None
+
+    data = DAILY_INTAKE[key]
+    items = data["items"]
+
+    new_items = [i for i in items if i["food_id"] != food_id]
+
+    if len(new_items) == len(items):
+        return "not_found"
+
+    totals = {
+        "protein": 0,
+        "carbs": 0,
+        "fat": 0,
+        "calories": 0
+    }
+
+    for item in new_items:
+        totals["protein"] += item["protein"]
+        totals["carbs"] += item["carbs"]
+        totals["fat"] += item["fat"]
+        totals["calories"] += item["calories"]
+
+    DAILY_INTAKE[key] = {
+        "items": new_items,
+        "totals": totals
+    }
+
+    return DAILY_INTAKE[key]
