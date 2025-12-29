@@ -151,3 +151,17 @@ def get_user_setup_status(email):
         "profile_completed": email in USERS,
         "journey_completed": email in JOURNEY
     }
+
+def get_favorites(email):
+    food_ids = FAVORITES.get(email, [])
+    result = []
+
+    for food in FOODS:
+        if food["id"] in food_ids:
+            result.append({
+                "food_id": food["id"],
+                "name": food["name"],
+                "meal": food["meal"]
+            })
+
+    return result
