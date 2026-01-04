@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Meeting | Spark</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" />
+
+  <style>
+    :root {
+      --gm-bg: #202124;
+      --gm-surface: #3c4043;
+      --gm-on-surface: #e8eaed;
+      --gm-red: #ea4335;
+      --gm-blue: #8ab4f8;
+      --gm-card-bg: #111;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      margin: 0;
+      background: var(--gm-bg);
+      color: var(--gm-on-surface);
+      font-family: 'Google Sans', Roboto, Arial, sans-serif;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ================= HEADER ================= */
+    header {
+      height: 64px;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .meeting-details {
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    /* ================= VIDEO GRID ================= */
+    #video-grid {
+      flex: 1;
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      /* Responsive grid that adjusts to participant count */
+      grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+      align-content: start;
+      justify-content: center;
+      overflow-y: auto;
+      overflow-x: hidden;
+      align-items: start;
+      justify-items: center;
+      width: 100%;
+      max-width: 100%;
+    }
+
+    #video-grid:has(> :only-child) {
+      align-content: center;
+      align-items: center;
+    }
+
+    #video-grid:has(> :only-child) .video-card {
+      width: min(90vw, 800px);
+      max-height: 70vh;
+    }
+
+    .video-card {
+      position: relative;
+      background: var(--gm-card-bg);
+      border-radius: 12px;
+      overflow: hidden;
+      aspect-ratio: 16 / 9;
+      transition: all 0.3s ease;
+      border: 2px solid transparent;
+      width: 100%;
+      max-width: 100%;
+      flex-shrink: 0;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    /* --- Status Icons on Video Tile --- */
+    .grid-status-icons {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: flex;
+      gap: 6px;
+      z-index: 5;
+    }
+
+    .status-badge {
+      width: 28px;
+      height: 28px;
+      background: rgba(0, 0, 0, 0.6);
+      border-radius: 50%;
+      display: flex;
+      /* We toggle visibility via parent class */
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      backdrop-filter: blur(4px);
+      opacity: 0;
+      transform: scale(0.8);
+      transition: all 0.2s ease;
+    }
+
+    /* Show icons when parent has the state class */
+    .video-card.is-muted .mic-off-icon {
+      opacity: 1;
+      transform: scale(1);
+      background: var(--gm-red);
+    }
+
+    .video-card.is-video-off .cam-off-icon {
+      opacity: 1;
+      transform: scale(1);
+      background: var(--gm-red);
+    }
+
+    .name-tag {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      backdrop-filter: blur(8px);
+      max-width: calc(100% - 16px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ================= BOTTOM BAR ================= */
+    .bottom-bar {
+      height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 16px 8px;
+      width: 100%;
+    }
+
+    .control-pill {
+      display: flex;
+      gap: 12px;
+      background: var(--gm-surface);
+      padding: 8px 16px;
+      border-radius: 40px;
+      max-width: 100%;
+    }
+
+    .control-pill button {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      color: white;
+      font-size: 20px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+
+    /* This hides the "Mute/Unmute" text from script.js and only shows icons */
+    .control-pill button {
+      font-size: 0;
+    }
+
+    .control-pill button i {
+      font-size: 20px;
+    }
+
+    .control-pill button:hover {
+      background: var(--gm-btn-hover, rgba(255, 255, 255, 0.1));
+    }
+
+    /* Button Toggled Off State */
+    .control-pill button.toggled-off {
+      background: var(--gm-red);
+    }
+
+    #leaveButton {
+      background: var(--gm-red);
+      width: 60px;
+      border-radius: 24px;
+    }
+
+    #leaveButton i {
+      transform: rotate(135deg);
+    }
+
+    /* ================= TABLET ================= */
+    @media (max-width: 900px) {
+      header {
+        height: 56px;
+        padding: 0 16px;
+      }
+
+      .meeting-details {
+        font-size: 15px;
+      }
+
+      #video-grid {
+        grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .video-card {
+        border-radius: 10px;
+      }
+
+      .bottom-bar {
+        height: 72px;
+        padding: 0 12px 6px;
+      }
+
+      .control-pill {
+        gap: 10px;
+        padding: 6px 14px;
+      }
+
+      .control-pill button {
+        width: 44px;
+        height: 44px;
+      }
+
+      .control-pill button i {
+        font-size: 18px;
+      }
+
+      #leaveButton {
+        width: 54px;
+      }
+    }
+
+    /* ================= MOBILE ================= */
+    @media (max-width: 600px) {
+      header {
+        height: 48px;
+        padding: 0 12px;
+        flex-shrink: 0;
+      }
+
+      .meeting-details {
+        font-size: 14px;
+      }
+
+      #video-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 8px;
+        align-items: center;
+        justify-content: flex-start;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      #video-grid:has(> :only-child) {
+        justify-content: center;
+      }
+
+      #video-grid:has(> :only-child) .video-card {
+        width: 100%;
+        max-width: 100%;
+      }
+
+      .video-card {
+        border-radius: 8px;
+        width: 100%;
+        max-width: 100%;
+        aspect-ratio: 16 / 9;
+        flex-shrink: 0;
+      }
+
+      .grid-status-icons {
+        top: 6px;
+        right: 6px;
+        gap: 4px;
+      }
+
+      .status-badge {
+        width: 24px;
+        height: 24px;
+        font-size: 10px;
+      }
+
+      .name-tag {
+        bottom: 6px;
+        left: 6px;
+        padding: 3px 8px;
+        font-size: 12px;
+      }
+
+      .bottom-bar {
+        height: 64px;
+        padding: 0 8px;
+        padding-bottom: env(safe-area-inset-bottom, 8px);
+        flex-shrink: 0;
+      }
+
+      .control-pill {
+        gap: 8px;
+        padding: 6px 12px;
+      }
+
+      .control-pill button {
+        width: 40px;
+        height: 40px;
+      }
+
+      .control-pill button i {
+        font-size: 16px;
+      }
+
+      #leaveButton {
+        width: 48px;
+        border-radius: 20px;
+      }
+    }
+
+    /* ================= SMALL MOBILE ================= */
+    @media (max-width: 360px) {
+      header {
+        height: 44px;
+        padding: 0 8px;
+      }
+
+      .meeting-details {
+        font-size: 13px;
+      }
+
+      #video-grid {
+        padding: 6px;
+        gap: 6px;
+      }
+
+      .bottom-bar {
+        height: 56px;
+      }
+
+      .control-pill {
+        gap: 6px;
+        padding: 5px 10px;
+      }
+
+      .control-pill button {
+        width: 36px;
+        height: 36px;
+      }
+
+      .control-pill button i {
+        font-size: 14px;
+      }
+
+      #leaveButton {
+        width: 44px;
+      }
+    }
+
+    /* ================= LANDSCAPE MOBILE ================= */
+    @media (max-height: 500px) and (orientation: landscape) {
+      header {
+        height: 40px;
+        padding: 0 12px;
+      }
+
+      #video-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        padding: 8px;
+        gap: 8px;
+        flex-direction: unset;
+      }
+
+      .video-card {
+        aspect-ratio: 16 / 9;
+      }
+
+      .bottom-bar {
+        height: 56px;
+        padding: 0 8px 4px;
+      }
+
+      .control-pill button {
+        width: 38px;
+        height: 38px;
+      }
+
+      #leaveButton {
+        width: 46px;
+      }
+    }
+
+    /* ================= JOIN SCREEN ================= */
+    #join-screen {
+      position: fixed;
+      inset: 0;
+      background: var(--gm-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 20px;
+    }
+    .join-container {
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+    }
+    .join-header {
+      margin-bottom: 24px;
+    }
+    .spark-logo {
+      width: 64px;
+      height: 64px;
+      background: linear-gradient(135deg, #8ab4f8, #669df6);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+      font-size: 28px;
+      color: #fff;
+      box-shadow: 0 8px 32px rgba(138, 180, 248, 0.3);
+      animation: pulse-glow 2s ease-in-out infinite;
+    }
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 8px 32px rgba(138, 180, 248, 0.3); }
+      50% { box-shadow: 0 8px 48px rgba(138, 180, 248, 0.5); }
+    }
+    .join-header h1 {
+      font-size: 24px;
+      font-weight: 500;
+      margin: 0 0 8px;
+      color: var(--gm-on-surface);
+    }
+    .join-subtitle {
+      font-size: 14px;
+      color: #9aa0a6;
+      margin: 0;
+    }
+    .preview-container {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: var(--gm-card-bg);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+    #preview-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    .preview-overlay {
+      position: absolute;
+      inset: 0;
+      background: var(--gm-card-bg);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 48px;
+      color: #5f6368;
+    }
+    .preview-overlay.show {
+      display: flex;
+    }
+    .preview-controls {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 12px;
+    }
+    .preview-btn {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: none;
+      background: var(--gm-surface);
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .preview-btn:hover {
+      background: #4a4d51;
+    }
+    .preview-btn.off {
+      background: var(--gm-red);
+    }
+    .join-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .input-wrapper i {
+      position: absolute;
+      left: 16px;
+      color: #9aa0a6;
+      font-size: 16px;
+    }
+    #username-input {
+      width: 100%;
+      padding: 14px 16px 14px 48px;
+      border: 2px solid var(--gm-surface);
+      border-radius: 12px;
+      background: transparent;
+      color: var(--gm-on-surface);
+      font-size: 16px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #username-input:focus {
+      border-color: var(--gm-blue);
+    }
+    #username-input::placeholder {
+      color: #5f6368;
+    }
+    #join-btn {
+      position: relative;
+      padding: 14px 24px;
+      border: none;
+      border-radius: 12px;
+      background: var(--gm-blue);
+      color: #202124;
+      font-size: 16px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.2s;
+      overflow: hidden;
+    }
+    #join-btn:disabled {
+      background: var(--gm-surface);
+      color: #5f6368;
+      cursor: not-allowed;
+    }
+    #join-btn:not(:disabled):hover {
+      background: #aecbfa;
+      transform: translateY(-1px);
+    }
+    #join-btn .btn-loader {
+      display: none;
+    }
+    #join-btn.loading .btn-text {
+      visibility: hidden;
+    }
+    #join-btn.loading .btn-loader {
+      display: block;
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+    .join-progress {
+      display: none;
+    }
+    .join-progress.show {
+      display: block;
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .progress-steps {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      opacity: 0.4;
+      transition: all 0.3s;
+    }
+    .step.active {
+      opacity: 1;
+    }
+    .step.done .step-icon {
+      background: #34a853;
+    }
+    .step-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--gm-surface);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      transition: all 0.3s;
+    }
+    .step span {
+      font-size: 12px;
+      color: #9aa0a6;
+    }
+    .progress-bar {
+      height: 4px;
+      background: var(--gm-surface);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--gm-blue), #34a853);
+      border-radius: 2px;
+      transition: width 0.5s ease;
+    }
+    #meeting-screen {
+      display: none;
+      flex-direction: column;
+      height: 100dvh;
+    }
+    @media (max-width: 480px) {
+      .join-container {
+        max-width: 100%;
+      }
+      .spark-logo {
+        width: 56px;
+        height: 56px;
+        font-size: 24px;
+      }
+      .join-header h1 {
+        font-size: 20px;
+      }
+      .preview-btn {
+        width: 40px;
+        height: 40px;
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="join-screen">
+    <div class="join-container">
+      <div class="join-header">
+        <div class="spark-logo">
+          <i class="fas fa-bolt"></i>
+        </div>
+        <h1>Study Pods 5.0</h1>
+        <p class="join-subtitle">Ready to join?</p>
+      </div>
+      <div class="preview-container">
+        <video id="preview-video" autoplay playsinline muted></video>
+        <div class="preview-overlay" id="preview-overlay">
+          <i class="fas fa-video-slash"></i>
+        </div>
+        <div class="preview-controls">
+          <button id="preview-mic" class="preview-btn" title="Toggle Mic">
+            <i class="fas fa-microphone"></i>
+          </button>
+          <button id="preview-cam" class="preview-btn" title="Toggle Camera">
+            <i class="fas fa-video"></i>
+          </button>
+        </div>
+      </div>
+      <div class="join-form">
+        <div class="input-wrapper">
+          <i class="fas fa-user"></i>
+          <input type="text" id="username-input" placeholder="Enter your name" maxlength="20" autocomplete="off" />
+        </div>
+        <button id="join-btn" disabled>
+          <span class="btn-text">Join Meeting</span>
+          <span class="btn-loader"><i class="fas fa-circle-notch fa-spin"></i></span>
+        </button>
+      </div>
+      <div class="join-progress" id="join-progress">
+        <div class="progress-steps">
+          <div class="step active" id="step-1">
+            <div class="step-icon"><i class="fas fa-check"></i></div>
+            <span>Camera Ready</span>
+          </div>
+          <div class="step" id="step-2">
+            <div class="step-icon"><i class="fas fa-check"></i></div>
+            <span>Connecting</span>
+          </div>
+          <div class="step" id="step-3">
+            <div class="step-icon"><i class="fas fa-check"></i></div>
+            <span>Joining</span>
+          </div>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="meeting-screen">
+    <header>
+      <div class="meeting-details"></div>
+    </header>
+
+    <div id="video-grid">
+    </div>
+
+    <div class="bottom-bar">
+      <div class="control-pill">
+        <button id="muteButton" title="Mute/Unmute">
+          <i class="fas fa-microphone"></i>
+        </button>
+
+        <button id="disablevideoButton" title="Video On/Off">
+          <i class="fas fa-video"></i>
+        </button>
+
+        <button id="diableaudioButton" title="Mute Others">
+          <i class="fas fa-volume-up"></i>
+        </button>
+
+        <button id="leaveButton" title="Leave Meeting">
+          <i class="fas fa-phone"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js"></script>
+
+  <script>
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach(mutation => {
+        mutation.addedNodes.forEach(node => {
+          if (node.classList && node.classList.contains('video-card')) {
+            const statusContainer = document.createElement('div');
+            statusContainer.className = 'grid-status-icons';
+            statusContainer.innerHTML = `
+              <div class="status-badge mic-off-icon"><i class="fas fa-microphone-slash"></i></div>
+              <div class="status-badge cam-off-icon"><i class="fas fa-video-slash"></i></div>
+            `;
+            node.appendChild(statusContainer);
+          }
+        });
+      });
+    });
+
+    observer.observe(document.getElementById('video-grid'), { childList: true });
+
+    // 2. Handle Button Clicks to toggle classes on local video grid icons
+    const syncButton = (btnId, iconOn, iconOff, gridClass) => {
+      const btn = document.getElementById(btnId);
+      btn.addEventListener('click', () => {
+        const isOff = btn.classList.toggle('toggled-off');
+        const icon = btn.querySelector('i');
+
+        // Update Button Icon
+        icon.className = isOff ? iconOff : iconOn;
+
+        // Update the Local Video Card (usually the first one or the one without "wrapper-")
+        const allCards = document.querySelectorAll('.video-card');
+        const localCard = Array.from(allCards).find(card => !card.id.includes('wrapper'));
+
+        if (localCard) {
+          localCard.classList.toggle(gridClass, isOff);
+        }
+      });
+    };
+
+    syncButton('muteButton', 'fas fa-microphone', 'fas fa-microphone-slash', 'is-muted');
+    syncButton('disablevideoButton', 'fas fa-video', 'fas fa-video-slash', 'is-video-off');
+
+    // Toggle for incoming audio
+    const audioBtn = document.getElementById('diableaudioButton');
+    audioBtn.addEventListener('click', () => {
+      const isOff = audioBtn.classList.toggle('toggled-off');
+      audioBtn.querySelector('i').className = isOff ? 'fas fa-volume-xmark' : 'fas fa-volume-up';
+    });
+  </script>
+
+</body>
+
+</html>
