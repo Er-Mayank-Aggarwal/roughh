@@ -1,75 +1,227 @@
 const express = require("express");
-const app = express();
 const http = require("http");
-const server = http.createServer(app);
-const io = require("socket.io")(server);
+const { Server } = require("socket.io");
 const path = require("path");
-app.use(express.static(path.join(__dirname, "client")));
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "client", "index.html"));
-});
-const users = {};
-const userRooms = {};
-const userStatus = {};
-io.on("connection", (socket) => {
-  socket.on("join-room", (roomId, username, status) => {
-    socket.join(roomId);
-    users[socket.id] = username;
-    userRooms[socket.id] = roomId;
-    userStatus[socket.id] = status || { audio: false, video: false };
-    socket.to(roomId).emit("user-connected", { userId: socket.id, username, status: userStatus[socket.id] });
-    const existingUsers = [];
-    const roomSockets = io.sockets.adapter.rooms.get(roomId);
-    if (roomSockets) {
-      roomSockets.forEach(socketId => {
-        if (socketId !== socket.id && users[socketId]) {
-          existingUsers.push({
-            userId: socketId,
-            username: users[socketId],
-            status: userStatus[socketId] || { audio: false, video: false }
-          });
-        }
+
+const CONFIG = {
+  port: process.env.PORT || 5500,
+  clientPath: path.join(__dirname, "client")
+};
+
+class UserManager {
+  constructor() {
+    this.users = new Map(); // socketId -> { username, roomId, status }
+  }
+
+  addUser(socketId, username, roomId, status = { audio: false, video: false }) {
+    this.users.set(socketId, { username, roomId, status });
+  }
+
+  removeUser(socketId) {
+    const user = this.users.get(socketId);
+    this.users.delete(socketId);
+    return user;
+  }
+
+  getUser(socketId) {
+    return this.users.get(socketId);
+  }
+
+  getUsername(socketId) {
+    const user = this.users.get(socketId);
+    return user ? user.username : null;
+  }
+
+  getRoomId(socketId) {
+    const user = this.users.get(socketId);
+    return user ? user.roomId : null;
+  }
+
+  getStatus(socketId) {
+    const user = this.users.get(socketId);
+    return user ? user.status : { audio: false, video: false };
+  }
+
+  updateStatus(socketId, type, status) {
+    const user = this.users.get(socketId);
+    if (user && user.status) {
+      user.status[type] = status;
+    }
+  }
+
+  getUsersInRoom(roomId, excludeSocketId = null) {
+    const usersInRoom = [];
+    for (const [socketId, userData] of this.users) {
+      if (userData.roomId === roomId && socketId !== excludeSocketId) {
+        usersInRoom.push({
+          userId: socketId,
+          username: userData.username,
+          status: userData.status
+        });
+      }
+    }
+    return usersInRoom;
+  }
+}
+
+class SignalingServer {
+  constructor() {
+    this.app = express();
+    this.server = http.createServer(this.app);
+    this.io = new Server(this.server, {
+      cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+      }
+    });
+    
+    this.userManager = new UserManager();
+    
+    this.setupMiddleware();
+    this.setupRoutes();
+    this.setupSocketHandlers();
+  }
+
+  setupMiddleware() {
+    this.app.use(express.static(CONFIG.clientPath));
+  }
+
+  setupRoutes() {
+    this.app.get("/", (req, res) => {
+      res.sendFile(path.join(CONFIG.clientPath, "index.html"));
+    });
+
+    this.app.get("/health", (req, res) => {
+      res.json({ 
+        status: "ok", 
+        timestamp: new Date().toISOString(),
+        connectedUsers: this.userManager.users.size
       });
-    }
-    socket.emit("existing-users", existingUsers);
-  });
-  socket.on("disconnect1", () => {
-    const roomId = userRooms[socket.id];
-    if (roomId) {
-      socket.to(roomId).emit("user-disconnected", socket.id);
-    }
-    delete users[socket.id];
-    delete userRooms[socket.id];
-    delete userStatus[socket.id];
-  });
-  socket.on("disconnect", () => {
-    const roomId = userRooms[socket.id];
-    if (roomId) {
-      socket.to(roomId).emit("user-disconnected", socket.id);
-    }
-    delete users[socket.id];
-    delete userRooms[socket.id];
-    delete userStatus[socket.id];
-  });
-  socket.on("toggle-status", ({ type, status }) => {
-    if (userStatus[socket.id]) {
-      userStatus[socket.id][type] = status;
-    }
-    const rooms = Array.from(socket.rooms).filter(r => r !== socket.id);
-    rooms.forEach(roomId => {
-      socket.to(roomId).emit("user-status-updated", {
+    });
+  }
+
+  setupSocketHandlers() {
+    this.io.on("connection", (socket) => {
+      console.log(`User connected: ${socket.id}`);
+      
+      this.handleJoinRoom(socket);
+      this.handleToggleStatus(socket);
+      this.handleSignal(socket);
+      this.handleDisconnect(socket);
+    });
+  }
+
+  handleJoinRoom(socket) {
+    socket.on("join-room", (roomId, username, status) => {
+      if (!roomId || typeof roomId !== "string") {
+        socket.emit("error", { message: "Invalid room ID" });
+        return;
+      }
+
+      const sanitizedUsername = this.sanitizeUsername(username);
+      const sanitizedStatus = this.validateStatus(status);
+
+      socket.join(roomId);
+      this.userManager.addUser(socket.id, sanitizedUsername, roomId, sanitizedStatus);
+
+      console.log(`${sanitizedUsername} (${socket.id}) joined room: ${roomId}`);
+
+      socket.to(roomId).emit("user-connected", {
         userId: socket.id,
-        type,
-        status
+        username: sanitizedUsername,
+        status: sanitizedStatus
+      });
+
+      const existingUsers = this.userManager.getUsersInRoom(roomId, socket.id);
+      socket.emit("existing-users", existingUsers);
+    });
+  }
+
+  handleToggleStatus(socket) {
+    socket.on("toggle-status", ({ type, status }) => {
+      if (!["audio", "video"].includes(type)) {
+        return;
+      }
+
+      const normalizedStatus = Boolean(status);
+      this.userManager.updateStatus(socket.id, type, normalizedStatus);
+
+      const roomId = this.userManager.getRoomId(socket.id);
+      if (roomId) {
+        socket.to(roomId).emit("user-status-updated", {
+          userId: socket.id,
+          type,
+          status: normalizedStatus
+        });
+      }
+    });
+  }
+
+  handleSignal(socket) {
+    socket.on("signal", (data) => {
+      if (!data || !data.target || !data.payload) {
+        return;
+      }
+
+      const username = this.userManager.getUsername(socket.id);
+      
+      this.io.to(data.target).emit("signal", {
+        sender: socket.id,
+        username: username,
+        payload: data.payload
       });
     });
-  });
-  socket.on("signal", (data) => {
-    io.to(data.target).emit("signal", {
-      sender: socket.id,
-      username: users[socket.id],
-      payload: data.payload
+  }
+
+  handleDisconnect(socket) {
+    const cleanup = () => {
+      const user = this.userManager.getUser(socket.id);
+      
+      if (user && user.roomId) {
+        console.log(`${user.username} (${socket.id}) left room: ${user.roomId}`);
+        socket.to(user.roomId).emit("user-disconnected", socket.id);
+      }
+      this.userManager.removeUser(socket.id);
+    };
+
+    socket.on("disconnect", () => {
+      console.log(`User disconnected: ${socket.id}`);
+      cleanup();
     });
-  });
-});
-server.listen(5500, () => console.log("Server running on port 5500"));
+
+    socket.on("disconnect1", () => {
+      console.log(`User manually disconnected: ${socket.id}`);
+      cleanup();
+      socket.disconnect(true);
+    });
+  }
+
+  sanitizeUsername(username) {
+    if (!username || typeof username !== "string") {
+      return "Guest";
+    }
+    return username.trim().slice(0, 20).replace(/[<>]/g, "") || "Guest";
+  }
+
+  validateStatus(status) {
+    if (!status || typeof status !== "object") {
+      return { audio: false, video: false };
+    }
+    return {
+      audio: Boolean(status.audio),
+      video: Boolean(status.video)
+    };
+  }
+
+  start() {
+    this.server.listen(CONFIG.port, () => {
+      console.log(`
+      Server running on port ${CONFIG.port}
+      http://localhost:${CONFIG.port}          
+      `);
+    });
+  }
+}
+
+const server = new SignalingServer();
+server.start();

@@ -780,56 +780,39 @@
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="script.js"></script>
+  <script type="module" src="js/main.js"></script>
 
   <script>
     const observer = new MutationObserver((mutations) => {
       mutations.forEach(mutation => {
         mutation.addedNodes.forEach(node => {
           if (node.classList && node.classList.contains('video-card')) {
-            const statusContainer = document.createElement('div');
-            statusContainer.className = 'grid-status-icons';
-            statusContainer.innerHTML = `
-              <div class="status-badge mic-off-icon"><i class="fas fa-microphone-slash"></i></div>
-              <div class="status-badge cam-off-icon"><i class="fas fa-video-slash"></i></div>
-            `;
-            node.appendChild(statusContainer);
+            if (!node.querySelector('.grid-status-icons')) {
+              const statusContainer = document.createElement('div');
+              statusContainer.className = 'grid-status-icons';
+              statusContainer.innerHTML = `
+                <div class="status-badge mic-off-icon"><i class="fas fa-microphone-slash"></i></div>
+                <div class="status-badge cam-off-icon"><i class="fas fa-video-slash"></i></div>
+              `;
+              node.appendChild(statusContainer);
+            }
           }
         });
       });
     });
 
-    observer.observe(document.getElementById('video-grid'), { childList: true });
-
-    // 2. Handle Button Clicks to toggle classes on local video grid icons
-    const syncButton = (btnId, iconOn, iconOff, gridClass) => {
-      const btn = document.getElementById(btnId);
-      btn.addEventListener('click', () => {
-        const isOff = btn.classList.toggle('toggled-off');
-        const icon = btn.querySelector('i');
-
-        // Update Button Icon
-        icon.className = isOff ? iconOff : iconOn;
-
-        // Update the Local Video Card (usually the first one or the one without "wrapper-")
-        const allCards = document.querySelectorAll('.video-card');
-        const localCard = Array.from(allCards).find(card => !card.id.includes('wrapper'));
-
-        if (localCard) {
-          localCard.classList.toggle(gridClass, isOff);
-        }
-      });
-    };
-
-    syncButton('muteButton', 'fas fa-microphone', 'fas fa-microphone-slash', 'is-muted');
-    syncButton('disablevideoButton', 'fas fa-video', 'fas fa-video-slash', 'is-video-off');
-
-    // Toggle for incoming audio
-    const audioBtn = document.getElementById('diableaudioButton');
-    audioBtn.addEventListener('click', () => {
-      const isOff = audioBtn.classList.toggle('toggled-off');
-      audioBtn.querySelector('i').className = isOff ? 'fas fa-volume-xmark' : 'fas fa-volume-up';
+    const meetingScreen = document.getElementById('meeting-screen');
+    const videoGridObserver = new MutationObserver(() => {
+      if (meetingScreen.style.display !== 'none') {
+        observer.observe(document.getElementById('video-grid'), { childList: true });
+        videoGridObserver.disconnect();
+      }
     });
+    videoGridObserver.observe(meetingScreen, { attributes: true, attributeFilter: ['style'] });
+    
+    if (meetingScreen.style.display === 'flex') {
+      observer.observe(document.getElementById('video-grid'), { childList: true });
+    }
   </script>
 
 </body>
