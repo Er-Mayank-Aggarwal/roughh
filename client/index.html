@@ -135,6 +135,27 @@
       background: var(--gm-red);
     }
 
+    /* Hide video and show black background when video is off */
+    .video-card.is-video-off video {
+      visibility: hidden;
+    }
+
+    .video-card.is-video-off::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: var(--gm-card-bg);
+      z-index: 1;
+    }
+
+    .video-card.is-video-off .name-tag {
+      z-index: 2;
+    }
+
+    .video-card.is-video-off .grid-status-icons {
+      z-index: 3;
+    }
+
     .name-tag {
       position: absolute;
       bottom: 8px;
@@ -780,40 +801,9 @@
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script type="module" src="js/main.js"></script>
+  <script src="script.js"></script>
 
-  <script>
-    const observer = new MutationObserver((mutations) => {
-      mutations.forEach(mutation => {
-        mutation.addedNodes.forEach(node => {
-          if (node.classList && node.classList.contains('video-card')) {
-            if (!node.querySelector('.grid-status-icons')) {
-              const statusContainer = document.createElement('div');
-              statusContainer.className = 'grid-status-icons';
-              statusContainer.innerHTML = `
-                <div class="status-badge mic-off-icon"><i class="fas fa-microphone-slash"></i></div>
-                <div class="status-badge cam-off-icon"><i class="fas fa-video-slash"></i></div>
-              `;
-              node.appendChild(statusContainer);
-            }
-          }
-        });
-      });
-    });
 
-    const meetingScreen = document.getElementById('meeting-screen');
-    const videoGridObserver = new MutationObserver(() => {
-      if (meetingScreen.style.display !== 'none') {
-        observer.observe(document.getElementById('video-grid'), { childList: true });
-        videoGridObserver.disconnect();
-      }
-    });
-    videoGridObserver.observe(meetingScreen, { attributes: true, attributeFilter: ['style'] });
-    
-    if (meetingScreen.style.display === 'flex') {
-      observer.observe(document.getElementById('video-grid'), { childList: true });
-    }
-  </script>
 
 </body>
 

@@ -8,6 +8,44 @@ const CONFIG = {
   clientPath: path.join(__dirname, "client")
 };
 
+class RoomManager {
+  constructor() {
+    this.rooms = new Map(); // roomId -> Set of socketIds
+  }
+
+  joinRoom(roomId, socketId) {
+    if (!this.rooms.has(roomId)) {
+      this.rooms.set(roomId, new Set());
+    }
+    this.rooms.get(roomId).add(socketId);
+  }
+
+  leaveRoom(roomId, socketId) {
+    const room = this.rooms.get(roomId);
+    if (room) {
+      room.delete(socketId);
+      if (room.size === 0) {
+        this.rooms.delete(roomId);
+      }
+    }
+  }
+
+  getRoomUsers(roomId) {
+    return this.rooms.get(roomId) || new Set();
+  }
+
+  getUserRoom(socketId, io) {
+    // Get room from socket.io adapter
+    const socketRooms = io.sockets.adapter.rooms;
+    for (const [roomId, participants] of socketRooms) {
+      if (roomId !== socketId && participants.has(socketId)) {
+        return roomId;
+      }
+    }
+    return null;
+  }
+}
+
 class UserManager {
   constructor() {
     this.users = new Map(); // socketId -> { username, roomId, status }
@@ -75,6 +113,7 @@ class SignalingServer {
       }
     });
     
+    this.roomManager = new RoomManager();
     this.userManager = new UserManager();
     
     this.setupMiddleware();
@@ -122,7 +161,9 @@ class SignalingServer {
       const sanitizedStatus = this.validateStatus(status);
 
       socket.join(roomId);
+      
       this.userManager.addUser(socket.id, sanitizedUsername, roomId, sanitizedStatus);
+      this.roomManager.joinRoom(roomId, socket.id);
 
       console.log(`${sanitizedUsername} (${socket.id}) joined room: ${roomId}`);
 
@@ -179,8 +220,12 @@ class SignalingServer {
       
       if (user && user.roomId) {
         console.log(`${user.username} (${socket.id}) left room: ${user.roomId}`);
+        
         socket.to(user.roomId).emit("user-disconnected", socket.id);
+        
+        this.roomManager.leaveRoom(user.roomId, socket.id);
       }
+      
       this.userManager.removeUser(socket.id);
     };
 
@@ -216,12 +261,13 @@ class SignalingServer {
   start() {
     this.server.listen(CONFIG.port, () => {
       console.log(`
-      Server running on port ${CONFIG.port}
-      http://localhost:${CONFIG.port}          
+      Server running on port ${CONFIG.port}              
+      http://localhost:${CONFIG.port}                
       `);
     });
   }
 }
 
+// ============== APPLICATION ENTRY POINT ==============
 const server = new SignalingServer();
 server.start();
