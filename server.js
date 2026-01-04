@@ -7,6 +7,12 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 const path = require("path");
 
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "client", "student.html"));
+});
+app.get("/teacher", (req, res) => {
+  res.sendFile(path.join(__dirname, "client", "teacher.html"));
+});
 app.use(express.static("client"));
 
 let teacherId = null;
@@ -49,6 +55,6 @@ io.on("connection", socket => {
   });
 });
 
-server.listen(5000, () =>
-  console.log("Signaling server running on http://localhost:5000")
+server.listen(5500, () =>
+  console.log("Signaling server running on http://localhost:5500")
 );
