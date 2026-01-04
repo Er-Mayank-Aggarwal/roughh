@@ -1,60 +1,39 @@
 const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-
 const app = express();
+const http = require("http");
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = require("socket.io")(server);
 const path = require("path");
+
+app.use(express.static(path.join(__dirname, "client")));
 
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "client", "student.html"));
 });
-app.get("/teacher", (req, res) => {
-  res.sendFile(path.join(__dirname, "client", "teacher.html"));
-});
-app.use(express.static("client"));
 
-let teacherId = null;
+io.on("connection", (socket) => {
+  // 1. Join Room
+  socket.on("join-room", (roomId) => {
+    socket.join(roomId);
+    console.log(`User joined: ${socket.id}`);
+    
+    // Broadcast to others: "Hey, I am here (socket.id)"
+    socket.to(roomId).emit("user-connected", socket.id);
 
-io.on("connection", socket => {
-  console.log("Connected:", socket.id);
-
-  socket.on("join", role => {
-    if (role === "teacher") {
-      teacherId = socket.id;
-      console.log("Teacher set:", teacherId);
-    } else {
-      console.log("Student joined:", socket.id);
-      io.to(teacherId).emit("student-joined", socket.id);
-      socket.emit("teacher-id", teacherId);
-    }
-  });
-
-  socket.on("offer", ({ target, offer }) => {
-    io.to(target).emit("offer", offer);
-  });
-
-  socket.on("answer", ({ answer }) => {
-    io.to(teacherId).emit("answer", {
-      from: socket.id,
-      answer
+    // Handle Disconnect
+    socket.on("disconnect", () => {
+      socket.to(roomId).emit("user-disconnected", socket.id);
     });
   });
 
-  socket.on("ice", ({ target, candidate }) => {
-    io.to(target).emit("ice", candidate);
-  });
-
-  socket.on("disconnect", () => {
-    console.log("Disconnected:", socket.id);
-    if (socket.id === teacherId) {
-      teacherId = null;
-      console.log("Teacher left, reset");
-    }
+  // 2. Relay Signals (Offer, Answer, ICE)
+  // We use 'io.to()' which REQUIRES the real Socket ID
+  socket.on("signal", (data) => {
+    io.to(data.target).emit("signal", {
+      sender: socket.id, // The server knows who sent it
+      payload: data.payload
+    });
   });
 });
 
-server.listen(5500, () =>
-  console.log("Signaling server running on http://localhost:5500")
-);
+server.listen(5500, () => console.log("✅ Server running on port 5500"));

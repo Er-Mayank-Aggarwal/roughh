@@ -6,37 +6,36 @@ const config = {
 
 const pc = new RTCPeerConnection(config);
 let teacherId = null;
-let answered = false;
 
-// 1. Start Media with Low Latency Constraints
+// 1. Monitor Connection State (Debugs Network Issues)
+pc.onconnectionstatechange = () => {
+  console.log("📶 Connection State:", pc.connectionState);
+  if (pc.connectionState === "failed") {
+    alert("Connection failed! Please refresh.");
+  }
+};
+
 async function start() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        width: { ideal: 320 }, // Low resolution for speed
-        height: { ideal: 240 },
-        frameRate: { ideal: 15, max: 20 } // Low FPS to reduce packet queue
-      },
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true
-      }
+      video: { width: 320, height: 240, frameRate: 15 },
+      audio: true
     });
 
-    // Show local self-view
-    const localVid = document.getElementById("localVideo");
-    localVid.srcObject = stream;
+    document.getElementById("localVideo").srcObject = stream;
     
-    // Add tracks to connection
-    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    // Add tracks carefully
+    stream.getTracks().forEach(track => {
+      pc.addTrack(track, stream);
+      console.log(`📤 Sending track: ${track.kind}`);
+    });
 
-    // Join only after media is ready
     socket.emit("join", "student");
-    console.log("📸 Local media ready (Low Latency Mode)");
+    console.log("✅ Ready. Joined as student.");
 
   } catch (err) {
-    console.error("Error accessing media:", err);
-    alert("Camera access is required for class!");
+    console.error("Camera Error:", err);
+    alert("Camera blocked! Use HTTPS or localhost.");
   }
 }
 
@@ -46,26 +45,42 @@ socket.on("teacher-id", id => {
   teacherId = id;
 });
 
-// 2. Handle Teacher Video (Optimized for Latency)
+// 2. Robust Video Handling
 pc.ontrack = e => {
-  console.log("✅ Teacher track received");
-  const video = document.getElementById("remoteVideo");
-  const btn = document.getElementById("startAudio");
-
-  if (video.srcObject !== e.streams[0]) {
+  console.log("📥 Track received:", e.track.kind);
+  
+  // Only handle video tracks for the main display
+  if (e.track.kind === 'video') {
+    const video = document.getElementById("remoteVideo");
     video.srcObject = e.streams[0];
     
-    // FORCE PLAY: Don't wait for buffer to fill
+    // FORCE VIDEO TO WAKE UP
     video.onloadedmetadata = () => {
-      video.play().catch(e => console.log("Autoplay blocked waiting for click"));
+      console.log(`🎬 Video Metadata Loaded: ${video.videoWidth}x${video.videoHeight}`);
+      if (video.videoWidth === 0) {
+        console.warn("⚠️ Video has 0 dimensions (Black Screen Issue)");
+      }
+      video.play().catch(console.error);
     };
   }
+  
+  // Audio handling
+  if (e.track.kind === 'audio') {
+    const video = document.getElementById("remoteVideo");
+    // Ensure audio plays
+    video.muted = false; 
+    video.play().catch(e => {
+        console.log("Autoplay blocked, showing button");
+        document.getElementById("startAudio").style.display = "block";
+    });
+  }
+};
 
-  btn.onclick = () => {
-    video.muted = false;
-    video.play();
-    btn.style.display = "none";
-  };
+document.getElementById("startAudio").onclick = () => {
+  const v = document.getElementById("remoteVideo");
+  v.muted = false;
+  v.play();
+  document.getElementById("startAudio").style.display = "none";
 };
 
 pc.onicecandidate = e => {
@@ -74,15 +89,14 @@ pc.onicecandidate = e => {
   }
 };
 
-socket.on("offer", async offer => {
-  if (answered) return;
-  answered = true;
+socket.on("offer", async payload => {
+  const offer = payload.offer || payload;
   await pc.setRemoteDescription(offer);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
-  socket.emit("answer", { answer });
+  socket.emit("answer", { target: teacherId, answer });
 });
 
-socket.on("ice", candidate => {
-  pc.addIceCandidate(candidate).catch(e => console.error(e));
+socket.on("signal", candidate => {
+  pc.addIceCandidate(candidate).catch(e => {});
 });

@@ -4,71 +4,75 @@ const config = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
 };
 
-let localStream;
-const peers = {}; // Map: studentId -> RTCPeerConnection
+let localStream = null;
+const peers = {}; 
 
-// 1. Initialize Teacher Media (Low Latency)
-(async () => {
+// 1. Ensure Camera is Ready BEFORE connecting
+async function initTeacher() {
   try {
-    socket.emit("join", "teacher");
-
     localStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        width: { ideal: 320 },
-        height: { ideal: 240 },
-        frameRate: { ideal: 15, max: 20 }
-      },
+      video: { width: 320, height: 240, frameRate: 15 },
       audio: true
     });
-
+    
     document.getElementById("localVideo").srcObject = localStream;
-    console.log("✅ Teacher media ready");
-  } catch(e) {
-    console.error("Camera failed", e);
-    alert("Please allow camera access.");
+    socket.emit("join", "teacher");
+    console.log("✅ Teacher Online");
+    
+  } catch (err) {
+    console.error("Camera Fail:", err);
+    alert("Camera access denied. Check HTTPS/Permissions.");
   }
-})();
+}
 
-// 2. Handle New Student
+initTeacher();
+
 socket.on("student-joined", async studentId => {
-  console.log(`NEW STUDENT: ${studentId}`);
+  console.log(`👨‍🎓 Student joined: ${studentId}`);
+  
+  if (!localStream) {
+    console.error("❌ Cannot connect: Camera not ready yet");
+    return;
+  }
+
   const pc = new RTCPeerConnection(config);
   peers[studentId] = pc;
 
-  // Send Teacher stream
+  // Add Tracks
   localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-  // Receive Student stream
+  // Handle Incoming Student Video
   pc.ontrack = e => {
-    console.log(`📺 Received track from ${studentId}`);
     const grid = document.getElementById("video-grid");
     
-    // Prevent duplicates
-    let vidWrapper = document.getElementById(`wrapper-${studentId}`);
-    
-    if (!vidWrapper) {
-      vidWrapper = document.createElement("div");
-      vidWrapper.className = "video-wrapper";
-      vidWrapper.id = `wrapper-${studentId}`;
-      
-      const vid = document.createElement("video");
-      vid.autoplay = true;
-      vid.playsInline = true;
-      vid.srcObject = e.streams[0];
-      
-      // IMPORTANT: Autoplay fix
-      vid.onloadedmetadata = () => {
-        vid.play().catch(e => console.error("Play error:", e));
-      };
-      
-      const label = document.createElement("div");
-      label.className = "label";
-      label.textContent = `Student ${studentId.substr(0,4)}`;
+    if (document.getElementById(`vid-${studentId}`)) return; // No duplicates
 
-      vidWrapper.appendChild(vid);
-      vidWrapper.appendChild(label);
-      grid.appendChild(vidWrapper);
-    }
+    console.log(`📺 Video from ${studentId}`);
+    
+    const wrapper = document.createElement("div");
+    wrapper.className = "video-wrapper";
+    
+    const vid = document.createElement("video");
+    vid.id = `vid-${studentId}`;
+    vid.autoplay = true;
+    vid.playsInline = true;
+    vid.muted = true; // IMPORTANT: Muted prevents black screen on autoplay
+    vid.srcObject = e.streams[0];
+    
+    // DEBUG: Check if video is actually drawing
+    vid.addEventListener("resize", () => {
+        console.log(`📏 Video dimensions updated: ${vid.videoWidth}x${vid.videoHeight}`);
+    });
+
+    const label = document.createElement("div");
+    label.className = "label";
+    label.innerText = `Student ${studentId.substr(0,4)}`;
+
+    wrapper.appendChild(vid);
+    wrapper.appendChild(label);
+    grid.appendChild(wrapper);
+    
+    vid.play().catch(console.error);
   };
 
   pc.onicecandidate = e => {
@@ -79,13 +83,12 @@ socket.on("student-joined", async studentId => {
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-
   socket.emit("offer", { target: studentId, offer });
 });
 
 socket.on("answer", ({ from, answer }) => {
   if (peers[from]) {
-    peers[from].setRemoteDescription(answer);
+    peers[from].setRemoteDescription(answer).catch(console.error);
   }
 });
 
