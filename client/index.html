@@ -658,6 +658,19 @@
       flex-direction: column;
       height: 100dvh;
     }
+    .made-by {
+      margin-top: 24px;
+      font-size: 13px;
+      color: #9aa0a6;
+    }
+    .made-by i {
+      color: #ea4335;
+      animation: heartbeat 1.5s ease-in-out infinite;
+    }
+    @keyframes heartbeat {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.2); }
+    }
     @media (max-width: 480px) {
       .join-container {
         max-width: 100%;
@@ -733,6 +746,7 @@
           <div class="progress-fill" id="progress-fill"></div>
         </div>
       </div>
+      <p class="made-by">Made with <i class="fas fa-heart"></i> by Hemang and Mayank</p>
     </div>
   </div>
 
