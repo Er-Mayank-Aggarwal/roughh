@@ -2,8 +2,16 @@
 const CONFIG = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
   mediaConstraints: {
-    video: { width: 320, height: 240, frameRate: 15 },
-    audio: true
+    video: { 
+      width: { ideal: 320, max: 640 }, 
+      height: { ideal: 240, max: 480 }, 
+      frameRate: { ideal: 15, max: 30 },
+      facingMode: "user"
+    },
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true
+    }
   },
   meetingId: "132576",
   appName: "Study Pods 5.0"
@@ -17,12 +25,78 @@ class MediaManager {
     this.videoElement = null;
   }
 
+  async checkPermissions() {
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        const cameraPermission = await navigator.permissions.query({ name: 'camera' }).catch(() => null);
+        const micPermission = await navigator.permissions.query({ name: 'microphone' }).catch(() => null);
+        return {
+          camera: cameraPermission?.state || 'prompt',
+          microphone: micPermission?.state || 'prompt'
+        };
+      }
+    } catch (e) {
+      console.log('Permissions API not fully supported');
+    }
+    return { camera: 'prompt', microphone: 'prompt' };
+  }
+
   async initializeMedia(constraints = CONFIG.mediaConstraints) {
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Media devices not supported. Please use HTTPS or a supported browser.');
+      }
+
+      const permissionStatus = await this.checkPermissions();
+      console.log('Permission status:', permissionStatus);
+
+      try {
+        this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (initialError) {
+        console.warn('Initial getUserMedia failed, trying fallback constraints:', initialError);
+        
+        const fallbackConstraints = {
+          video: { facingMode: "user" },
+          audio: true
+        };
+        
+        try {
+          this.localStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+        } catch (fallbackError) {
+          console.warn('Fallback with video failed, trying audio only:', fallbackError);
+          
+          try {
+            this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            this.videoEnabled = false;
+          } catch (audioOnlyError) {
+            console.error('All getUserMedia attempts failed:', audioOnlyError);
+            throw audioOnlyError;
+          }
+        }
+      }
+
+      if (this.localStream) {
+        this.localStream.getTracks().forEach(track => {
+          console.log(`Got ${track.kind} track:`, track.label, track.readyState);
+        });
+      }
+
       return this.localStream;
     } catch (error) {
       console.error("Failed to get media devices:", error);
+      
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        alert('Camera/Microphone permission denied. Please allow access in your browser settings and reload the page.');
+      } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        alert('No camera or microphone found. Please connect a device and reload.');
+      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        alert('Camera or microphone is already in use by another application.');
+      } else if (error.name === 'OverconstrainedError') {
+        alert('Camera does not support the requested settings. Trying with default settings...');
+      } else if (error.name === 'SecurityError') {
+        alert('Media access requires HTTPS. Please use a secure connection.');
+      }
+      
       throw error;
     }
   }
@@ -50,9 +124,17 @@ class MediaManager {
       });
     } else {
       try {
-        const newStream = await navigator.mediaDevices.getUserMedia({ 
-          video: CONFIG.mediaConstraints.video 
-        });
+        let newStream;
+        try {
+          newStream = await navigator.mediaDevices.getUserMedia({ 
+            video: CONFIG.mediaConstraints.video 
+          });
+        } catch (e) {
+          console.warn('Failed with ideal constraints, trying fallback:', e);
+          newStream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: "user" } 
+          });
+        }
         const newVideoTrack = newStream.getVideoTracks()[0];
         
         const oldVideoTrack = this.localStream.getVideoTracks()[0];
@@ -95,9 +177,17 @@ class MediaManager {
       });
     } else {
       try {
-        const newStream = await navigator.mediaDevices.getUserMedia({ 
-          video: CONFIG.mediaConstraints.video 
-        });
+        let newStream;
+        try {
+          newStream = await navigator.mediaDevices.getUserMedia({ 
+            video: CONFIG.mediaConstraints.video 
+          });
+        } catch (e) {
+          console.warn('Failed with ideal constraints, trying fallback:', e);
+          newStream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: "user" } 
+          });
+        }
         const newVideoTrack = newStream.getVideoTracks()[0];
         
         const oldVideoTrack = this.localStream.getVideoTracks()[0];
@@ -124,9 +214,162 @@ class MediaManager {
     return this.localStream;
   }
 
-  stopAllTracks() {
+  setupDeviceChangeListener(peerManager, onDeviceChange) {
+    if (!navigator.mediaDevices) return;
+
+    navigator.mediaDevices.ondevicechange = async () => {
+      console.log('Device change detected');
+      
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+        const audioDevices = devices.filter(d => d.kind === 'audioinput');
+        
+        console.log('Available devices:', { video: videoDevices.length, audio: audioDevices.length });
+
+        if (this.localStream) {
+          const currentVideoTrack = this.localStream.getVideoTracks()[0];
+          const currentAudioTrack = this.localStream.getAudioTracks()[0];
+
+          if (currentVideoTrack && currentVideoTrack.readyState === 'ended') {
+            console.log('Video track ended, attempting to get new video device');
+            if (videoDevices.length > 0 && this.videoEnabled) {
+              await this.recoverVideoTrack(peerManager);
+              if (onDeviceChange) onDeviceChange('video', 'recovered');
+            } else {
+              this.videoEnabled = false;
+              if (onDeviceChange) onDeviceChange('video', 'lost');
+            }
+          }
+
+          if (currentAudioTrack && currentAudioTrack.readyState === 'ended') {
+            console.log('Audio track ended, attempting to get new audio device');
+            if (audioDevices.length > 0 && this.audioEnabled) {
+              await this.recoverAudioTrack(peerManager);
+              if (onDeviceChange) onDeviceChange('audio', 'recovered');
+            } else {
+              this.audioEnabled = false;
+              if (onDeviceChange) onDeviceChange('audio', 'lost');
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error handling device change:', error);
+      }
+    };
+
     if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream.getTracks().forEach(track => {
+        track.onended = async () => {
+          console.log(`${track.kind} track ended unexpectedly`);
+          if (track.kind === 'video' && this.videoEnabled) {
+            await this.recoverVideoTrack(peerManager);
+            if (onDeviceChange) onDeviceChange('video', 'recovered');
+          } else if (track.kind === 'audio' && this.audioEnabled) {
+            await this.recoverAudioTrack(peerManager);
+            if (onDeviceChange) onDeviceChange('audio', 'recovered');
+          }
+        };
+      });
+    }
+  }
+
+  async recoverVideoTrack(peerManager) {
+    try {
+      let newStream;
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({ 
+          video: CONFIG.mediaConstraints.video 
+        });
+      } catch (e) {
+        newStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: "user" } 
+        });
+      }
+      
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (!newVideoTrack) {
+        throw new Error('No video track in new stream');
+      }
+
+      const oldVideoTrack = this.localStream.getVideoTracks()[0];
+      if (oldVideoTrack) {
+        oldVideoTrack.stop();
+        this.localStream.removeTrack(oldVideoTrack);
+      }
+      this.localStream.addTrack(newVideoTrack);
+
+      newVideoTrack.onended = async () => {
+        console.log('Recovered video track ended');
+        if (this.videoEnabled) {
+          await this.recoverVideoTrack(peerManager);
+        }
+      };
+
+      if (this.videoElement) {
+        this.videoElement.srcObject = this.localStream;
+      }
+
+      if (peerManager) {
+        peerManager.replaceVideoTrack(newVideoTrack);
+      }
+
+      console.log('Video track recovered successfully');
+      return true;
+    } catch (error) {
+      console.error('Failed to recover video track:', error);
+      this.videoEnabled = false;
+      return false;
+    }
+  }
+
+  async recoverAudioTrack(peerManager) {
+    try {
+      const newStream = await navigator.mediaDevices.getUserMedia({ 
+        audio: CONFIG.mediaConstraints.audio || true 
+      });
+      
+      const newAudioTrack = newStream.getAudioTracks()[0];
+      if (!newAudioTrack) {
+        throw new Error('No audio track in new stream');
+      }
+
+      const oldAudioTrack = this.localStream.getAudioTracks()[0];
+      if (oldAudioTrack) {
+        oldAudioTrack.stop();
+        this.localStream.removeTrack(oldAudioTrack);
+      }
+      this.localStream.addTrack(newAudioTrack);
+
+      newAudioTrack.onended = async () => {
+        console.log('Recovered audio track ended');
+        if (this.audioEnabled) {
+          await this.recoverAudioTrack(peerManager);
+        }
+      };
+
+      if (peerManager) {
+        peerManager.replaceAudioTrack(newAudioTrack);
+      }
+
+      console.log('Audio track recovered successfully');
+      return true;
+    } catch (error) {
+      console.error('Failed to recover audio track:', error);
+      this.audioEnabled = false;
+      return false;
+    }
+  }
+
+  stopAllTracks() {
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.ondevicechange = null;
+    }
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => {
+        track.onended = null;
+        track.stop();
+      });
       this.localStream = null;
     }
   }
@@ -300,6 +543,30 @@ class PeerConnectionManager {
         if (videoTransceiver && videoTransceiver.sender) {
           videoTransceiver.sender.replaceTrack(newTrack).catch(err => {
             console.error('Failed to replace track via transceiver:', err);
+          });
+        }
+      }
+    });
+  }
+
+  replaceAudioTrack(newTrack) {
+    this.peers.forEach((pc) => {
+      const senders = pc.getSenders();
+      const audioSender = senders.find(sender => 
+        sender.track?.kind === 'audio' || 
+        (sender.track === null && pc.getTransceivers().some(t => t.sender === sender && t.receiver.track?.kind === 'audio'))
+      );
+      
+      if (audioSender) {
+        audioSender.replaceTrack(newTrack).catch(err => {
+          console.error('Failed to replace audio track:', err);
+        });
+      } else {
+        const transceivers = pc.getTransceivers();
+        const audioTransceiver = transceivers.find(t => t.receiver.track?.kind === 'audio' || t.mid === '0');
+        if (audioTransceiver && audioTransceiver.sender) {
+          audioTransceiver.sender.replaceTrack(newTrack).catch(err => {
+            console.error('Failed to replace audio track via transceiver:', err);
           });
         }
       }
@@ -557,12 +824,43 @@ class MeetingController {
   async initializePreview() {
     const previewVideo = document.getElementById("preview-video");
     const previewOverlay = document.getElementById("preview-overlay");
+    const joinBtn = document.getElementById("join-btn");
 
     try {
       const stream = await this.mediaManager.initializeMedia();
       previewVideo.srcObject = stream;
+      
+      previewVideo.onloadedmetadata = () => {
+        previewVideo.play().catch(e => {
+          console.warn('Auto-play prevented:', e);
+        });
+      };
+      
+      if (!this.mediaManager.videoEnabled) {
+        previewOverlay.classList.add("show");
+        this.previewCamOff = true;
+        const previewCamBtn = document.getElementById("preview-cam");
+        if (previewCamBtn) {
+          previewCamBtn.classList.add("off");
+          previewCamBtn.querySelector("i").className = "fas fa-video-slash";
+        }
+      }
     } catch (error) {
+      console.error('Preview initialization failed:', error);
       previewOverlay.classList.add("show");
+      this.previewCamOff = true;
+      this.previewMicOff = true;
+      
+      const previewCamBtn = document.getElementById("preview-cam");
+      const previewMicBtn = document.getElementById("preview-mic");
+      if (previewCamBtn) {
+        previewCamBtn.classList.add("off");
+        previewCamBtn.querySelector("i").className = "fas fa-video-slash";
+      }
+      if (previewMicBtn) {
+        previewMicBtn.classList.add("off");
+        previewMicBtn.querySelector("i").className = "fas fa-microphone-slash";
+      }
     }
   }
 
@@ -666,6 +964,30 @@ class MeetingController {
     const localVideo = localWrapper.querySelector("video");
     this.mediaManager.setVideoElement(localVideo);
     this.uiManager.setInitialLocalStatus(this.previewMicOff, this.previewCamOff);
+
+    this.mediaManager.setupDeviceChangeListener(this.peerManager, (type, status) => {
+      console.log(`Device ${type} ${status}`);
+      if (status === 'lost') {
+        if (type === 'video') {
+          this.uiManager.updateLocalStatus('video', true);
+          const videoBtn = document.getElementById("disablevideoButton");
+          videoBtn.classList.add("toggled-off");
+          videoBtn.querySelector("i").className = "fas fa-video-slash";
+        } else if (type === 'audio') {
+          this.uiManager.updateLocalStatus('audio', true);
+          const muteBtn = document.getElementById("muteButton");
+          muteBtn.classList.add("toggled-off");
+          muteBtn.querySelector("i").className = "fas fa-microphone-slash";
+        }
+      } else if (status === 'recovered') {
+        if (type === 'video') {
+          this.uiManager.updateLocalStatus('video', false);
+          const videoBtn = document.getElementById("disablevideoButton");
+          videoBtn.classList.remove("toggled-off");
+          videoBtn.querySelector("i").className = "fas fa-video";
+        }
+      }
+    });
 
     this.socketManager.emit("join-room", this.roomId, this.myUsername, {
       audio: this.previewMicOff,
