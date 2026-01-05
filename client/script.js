@@ -127,10 +127,29 @@ class MediaManager {
     this.videoEnabled = !this.videoEnabled;
     
     if (!this.videoEnabled) {
+      // Disable video track instead of stopping it
       this.localStream.getVideoTracks().forEach(track => {
-        track.stop();
+        track.enabled = false;
       });
+      
+      // Update peers with disabled track
+      if (peerManager) {
+        peerManager.updateTrackEnabled('video', false);
+      }
     } else {
+      // Check if we have a live video track
+      const existingVideoTrack = this.localStream.getVideoTracks()[0];
+      
+      if (existingVideoTrack && existingVideoTrack.readyState === 'live') {
+        // Just re-enable the existing track
+        existingVideoTrack.enabled = true;
+        if (peerManager) {
+          peerManager.updateTrackEnabled('video', true);
+        }
+        console.log('Re-enabled existing video track');
+      } else {
+        // Need to get a new video track
+        console.log('Getting new video track...');
       try {
         let newStream;
         try {
@@ -163,6 +182,7 @@ class MediaManager {
         this.videoEnabled = false;
         return true;
       }
+      }
     }
     return !this.videoEnabled;
   }
@@ -180,10 +200,27 @@ class MediaManager {
     this.videoEnabled = enabled;
     
     if (!enabled) {
+      // Don't stop the track, just disable it to maintain peer connection
       this.localStream.getVideoTracks().forEach(track => {
-        track.stop();
+        track.enabled = false;
       });
+      if (peerManager) {
+        peerManager.updateTrackEnabled('video', false);
+      }
     } else {
+      // Check if we have a live video track
+      const existingVideoTrack = this.localStream.getVideoTracks()[0];
+      
+      if (existingVideoTrack && existingVideoTrack.readyState === 'live') {
+        // Just re-enable the existing track
+        existingVideoTrack.enabled = true;
+        if (peerManager) {
+          peerManager.updateTrackEnabled('video', true);
+        }
+        console.log('Re-enabled existing video track in setVideoEnabled');
+      } else {
+        // Need to get a new video track
+        console.log('Getting new video track in setVideoEnabled...');
       try {
         let newStream;
         try {
@@ -214,6 +251,7 @@ class MediaManager {
       } catch (error) {
         console.error("Failed to enable video:", error);
         this.videoEnabled = false;
+      }
       }
     }
   }
@@ -1156,6 +1194,15 @@ class MeetingController {
 
   async connectToNewUser(targetId) {
     const stream = this.mediaManager.getStream();
+    
+    // Log current stream state
+    const audioTracks = stream.getAudioTracks();
+    const videoTracks = stream.getVideoTracks();
+    console.log(`Connecting to ${targetId} with:`, {
+      audio: audioTracks.length > 0 ? `enabled=${audioTracks[0].enabled}` : 'none',
+      video: videoTracks.length > 0 ? `enabled=${videoTracks[0].enabled}` : 'none'
+    });
+    
     this.peerManager.createPeerConnection(targetId, stream);
     
     const offer = await this.peerManager.createOffer(targetId);
@@ -1176,6 +1223,16 @@ class MeetingController {
     }
 
     const stream = this.mediaManager.getStream();
+    
+    // Log stream state when handling signals
+    if (payload.offer || payload.answer) {
+      const audioTracks = stream.getAudioTracks();
+      const videoTracks = stream.getVideoTracks();
+      console.log(`Handling ${payload.offer ? 'offer' : 'answer'} from ${sender} with local stream:`, {
+        audio: audioTracks.length > 0 ? `enabled=${audioTracks[0].enabled}` : 'none',
+        video: videoTracks.length > 0 ? `enabled=${videoTracks[0].enabled}` : 'none'
+      });
+    }
 
     try {
       if (payload.offer) {
