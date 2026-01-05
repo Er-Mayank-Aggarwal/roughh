@@ -52,6 +52,14 @@ class MediaManager {
 
       try {
         this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        // Verify audio track is present and working
+        const audioTracks = this.localStream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          console.warn('No audio track obtained, retrying audio only...');
+          const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioStream.getAudioTracks().forEach(track => this.localStream.addTrack(track));
+        }
       } catch (initialError) {
         console.warn('Initial getUserMedia failed, trying fallback constraints:', initialError);
         
@@ -334,6 +342,9 @@ class MediaManager {
         throw new Error('No audio track in new stream');
       }
 
+      // Preserve the current enabled state
+      newAudioTrack.enabled = this.audioEnabled;
+
       const oldAudioTrack = this.localStream.getAudioTracks()[0];
       if (oldAudioTrack) {
         oldAudioTrack.stop();
@@ -349,7 +360,7 @@ class MediaManager {
       };
 
       if (peerManager) {
-        peerManager.replaceAudioTrack(newAudioTrack);
+        await peerManager.replaceAudioTrack(newAudioTrack);
       }
 
       console.log('Audio track recovered successfully');
@@ -405,7 +416,13 @@ class PeerConnectionManager {
 
     if (stream) {
       stream.getTracks().forEach(track => {
-        pc.addTrack(track, stream);
+        console.log(`Adding ${track.kind} track (enabled: ${track.enabled}) for peer ${userId}`);
+        try {
+          const sender = pc.addTrack(track, stream);
+          console.log(`Track added successfully, sender:`, sender);
+        } catch (err) {
+          console.error(`Failed to add ${track.kind} track:`, err);
+        }
       });
     }
 
@@ -549,8 +566,10 @@ class PeerConnectionManager {
     });
   }
 
-  replaceAudioTrack(newTrack) {
-    this.peers.forEach((pc) => {
+  async replaceAudioTrack(newTrack) {
+    const promises = [];
+    
+    this.peers.forEach((pc, userId) => {
       const senders = pc.getSenders();
       const audioSender = senders.find(sender => 
         sender.track?.kind === 'audio' || 
@@ -558,19 +577,32 @@ class PeerConnectionManager {
       );
       
       if (audioSender) {
-        audioSender.replaceTrack(newTrack).catch(err => {
-          console.error('Failed to replace audio track:', err);
-        });
+        promises.push(
+          audioSender.replaceTrack(newTrack)
+            .then(() => console.log(`Audio track replaced for peer ${userId}`))
+            .catch(err => console.error(`Failed to replace audio track for peer ${userId}:`, err))
+        );
       } else {
         const transceivers = pc.getTransceivers();
         const audioTransceiver = transceivers.find(t => t.receiver.track?.kind === 'audio' || t.mid === '0');
         if (audioTransceiver && audioTransceiver.sender) {
-          audioTransceiver.sender.replaceTrack(newTrack).catch(err => {
-            console.error('Failed to replace audio track via transceiver:', err);
-          });
+          promises.push(
+            audioTransceiver.sender.replaceTrack(newTrack)
+              .then(() => console.log(`Audio track replaced via transceiver for peer ${userId}`))
+              .catch(err => console.error(`Failed to replace audio track via transceiver for peer ${userId}:`, err))
+          );
+        } else {
+          console.warn(`No audio sender found for peer ${userId}, attempting to add track`);
+          try {
+            pc.addTrack(newTrack);
+          } catch (err) {
+            console.error(`Failed to add audio track for peer ${userId}:`, err);
+          }
         }
       }
     });
+    
+    await Promise.all(promises);
   }
 
   closePeer(userId) {
@@ -655,7 +687,20 @@ class UIManager {
       wrapper.dataset.local = "true";
     } else if (userId) {
       video.id = `vid-${userId}`;
+      video.muted = false;  // Explicitly unmute remote audio
+      video.volume = 1.0;   // Set volume to max
       this.videoElements.set(userId, { wrapper, video });
+      
+      // Ensure audio plays even with autoplay restrictions
+      video.play().catch(err => {
+        console.warn('Auto-play prevented for remote video:', err);
+        // Retry play on user interaction
+        const playOnInteraction = () => {
+          video.play().catch(e => console.error('Play failed:', e));
+          document.removeEventListener('click', playOnInteraction);
+        };
+        document.addEventListener('click', playOnInteraction, { once: true });
+      });
     }
 
     const label = document.createElement("div");
@@ -723,6 +768,7 @@ class UIManager {
     const remoteVideos = document.querySelectorAll(".video-card[id*='wrapper-'] video");
     remoteVideos.forEach(video => {
       video.muted = muted;
+      console.log(`Setting remote video muted to ${muted} for`, video.id);
     });
   }
 
@@ -802,6 +848,13 @@ class MeetingController {
   }
 
   handleRemoteTrack(userId, stream) {
+    console.log(`Received remote track from ${userId}, audio tracks: ${stream.getAudioTracks().length}, video tracks: ${stream.getVideoTracks().length}`);
+    
+    // Log audio track details
+    stream.getAudioTracks().forEach(track => {
+      console.log(`Remote audio track - enabled: ${track.enabled}, muted: ${track.muted}, readyState: ${track.readyState}`);
+    });
+    
     if (!this.uiManager.hasVideoElement(userId)) {
       const username = this.userManager.getUsername(userId);
       const status = this.userManager.getStatus(userId);
@@ -810,6 +863,14 @@ class MeetingController {
       // Apply initial status
       if (status.audio) wrapper.classList.add("is-muted");
       if (status.video) wrapper.classList.add("is-video-off");
+    } else {
+      // Update existing video element with new stream
+      const videoEl = document.getElementById(`vid-${userId}`);
+      if (videoEl && videoEl.srcObject !== stream) {
+        console.log(`Updating stream for existing video element ${userId}`);
+        videoEl.srcObject = stream;
+        videoEl.play().catch(e => console.error('Failed to play updated stream:', e));
+      }
     }
   }
 
