@@ -140,13 +140,13 @@ class MediaManager {
   async toggleVideo(peerManager) {
     if (!this.localStream) return false;
     this.videoEnabled = !this.videoEnabled;
-    
     if (!this.videoEnabled) {
       // Disable video track instead of stopping it
       this.localStream.getVideoTracks().forEach(track => {
         track.enabled = false;
       });
       
+      this.localStream.getVideoTracks()[0]?.stop();
       // Update peers with disabled track
       if (peerManager) {
         peerManager.updateTrackEnabled('video', false);
@@ -216,12 +216,21 @@ class MediaManager {
     
     if (!enabled) {
       // Don't stop the track, just disable it to maintain peer connection
-      this.localStream.getVideoTracks().forEach(track => {
-        track.enabled = false;
-      });
+      const videoTrack = this.localStream.getVideoTracks()[0];
+      if(!videoTrack) return;
       if (peerManager) {
-        peerManager.updateTrackEnabled('video', false);
+        peerManager.replaceVideoTrack(null);
       }
+      // this.localStream.getVideoTracks().forEach(track => {
+      //   track.enabled = false;
+      // });
+      this.localStream.removeTrack(videoTrack);
+      console.log(this.localStream.getAudioTracks());
+      videoTrack.stop();
+      return;
+      // if (peerManager) {
+      //   peerManager.updateTrackEnabled('video', false);
+      // }
     } else {
       // Check if we have a live video track
       const existingVideoTrack = this.localStream.getVideoTracks()[0];
@@ -976,11 +985,9 @@ class MeetingController {
     this.myUsername = "";
     this.roomId = CONFIG.meetingId;
     this.remoteAudioMuted = false;
-    
-    // Preview state
     this.previewMicOff = false;
     this.previewCamOff = false;
-    
+    this.previewStream = null; 
     this.initializePeerManager();
   }
 
@@ -995,7 +1002,6 @@ class MeetingController {
   handleRemoteTrack(userId, stream) {
     console.log(`Received remote track from ${userId}, audio tracks: ${stream.getAudioTracks().length}, video tracks: ${stream.getVideoTracks().length}`);
     
-    // Log audio track details
     stream.getAudioTracks().forEach(track => {
       console.log(`Remote audio track - enabled: ${track.enabled}, muted: ${track.muted}, readyState: ${track.readyState}`);
     });
@@ -1005,11 +1011,9 @@ class MeetingController {
       const status = this.userManager.getStatus(userId);
       const wrapper = this.uiManager.addVideoStream(stream, username, false, userId);
       
-      // Apply initial status
       if (status.audio) wrapper.classList.add("is-muted");
       if (status.video) wrapper.classList.add("is-video-off");
     } else {
-      // Update existing video element with new stream
       const videoEl = document.getElementById(`vid-${userId}`);
       if (videoEl && videoEl.srcObject !== stream) {
         console.log(`Updating stream for existing video element ${userId}`);
@@ -1030,11 +1034,10 @@ class MeetingController {
   async initializePreview() {
     const previewVideo = document.getElementById("preview-video");
     const previewOverlay = document.getElementById("preview-overlay");
-    const joinBtn = document.getElementById("join-btn");
-
+    
     try {
-      const stream = await this.mediaManager.initializeMedia();
-      previewVideo.srcObject = stream;
+      this.previewStream = await navigator.mediaDevices.getUserMedia(CONFIG.mediaConstraints);
+      previewVideo.srcObject = this.previewStream;
       
       previewVideo.onloadedmetadata = () => {
         previewVideo.play().catch(e => {
@@ -1042,17 +1045,9 @@ class MeetingController {
         });
       };
       
-      if (!this.mediaManager.videoEnabled) {
-        previewOverlay.classList.add("show");
-        this.previewCamOff = true;
-        const previewCamBtn = document.getElementById("preview-cam");
-        if (previewCamBtn) {
-          previewCamBtn.classList.add("off");
-          previewCamBtn.querySelector("i").className = "fas fa-video-slash";
-        }
-      }
+      console.log('Preview stream initialized (temporary for preview only)');
     } catch (error) {
-      console.error('Preview initialization failed:', error);
+      console.error('Preview stream failed:', error);
       previewOverlay.classList.add("show");
       this.previewCamOff = true;
       this.previewMicOff = true;
@@ -1074,9 +1069,6 @@ class MeetingController {
     const previewMicBtn = document.getElementById("preview-mic");
     const previewCamBtn = document.getElementById("preview-cam");
     const previewOverlay = document.getElementById("preview-overlay");
-    const previewVideo = document.getElementById("preview-video");
-
-    this.mediaManager.setVideoElement(previewVideo);
 
     previewMicBtn.onclick = () => {
       this.previewMicOff = !this.previewMicOff;
@@ -1084,7 +1076,12 @@ class MeetingController {
       previewMicBtn.querySelector("i").className = this.previewMicOff 
         ? "fas fa-microphone-slash" 
         : "fas fa-microphone";
-      this.mediaManager.setAudioEnabled(!this.previewMicOff);
+      
+      if (this.previewStream) {
+        this.previewStream.getAudioTracks().forEach(track => {
+          track.enabled = !this.previewMicOff;
+        });
+      }
     };
 
     previewCamBtn.onclick = async () => {
@@ -1094,7 +1091,40 @@ class MeetingController {
         ? "fas fa-video-slash" 
         : "fas fa-video";
       previewOverlay.classList.toggle("show", this.previewCamOff);
-      await this.mediaManager.setVideoEnabled(!this.previewCamOff);
+      
+      if (!this.previewStream) return;
+      
+      if (this.previewCamOff) {
+        // Stop video track completely to turn off camera hardware
+        const videoTracks = this.previewStream.getVideoTracks();
+        videoTracks.forEach(track => {
+          track.stop(); // This turns off the camera LED
+          this.previewStream.removeTrack(track);
+        });
+        console.log('Camera hardware stopped');
+      } else {
+        // Get new video track
+        try {
+          const newVideoStream = await navigator.mediaDevices.getUserMedia({ 
+            video: CONFIG.mediaConstraints.video 
+          });
+          const newVideoTrack = newVideoStream.getVideoTracks()[0];
+          
+          // Add new video track to existing stream
+          this.previewStream.addTrack(newVideoTrack);
+          
+          // Update video element's srcObject to reflect changes
+          const previewVideo = document.getElementById("preview-video");
+          previewVideo.srcObject = this.previewStream;
+          
+          console.log('Camera hardware restarted');
+        } catch (error) {
+          console.error('Failed to restart camera:', error);
+          this.previewCamOff = true; // Revert state
+          previewCamBtn.classList.add("off");
+          previewOverlay.classList.add("show");
+        }
+      }
     };
   }
 
@@ -1134,6 +1164,13 @@ class MeetingController {
     this.updateProgress(3, 100);
     await this.delay(400);
 
+    // Stop preview stream before transitioning
+    if (this.previewStream) {
+      this.previewStream.getTracks().forEach(track => track.stop());
+      this.previewStream = null;
+      console.log('Preview stream disposed');
+    }
+
     joinScreen.style.opacity = "0";
     joinScreen.style.transition = "opacity 0.3s";
     
@@ -1159,48 +1196,65 @@ class MeetingController {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  startMeeting() {
-    this.setupMeetingControls();
-    this.updateMeetingTime();
-    this.startTimeUpdater();
-    this.applyPreviewState();
-    
-    const stream = this.mediaManager.getStream();
-    const localWrapper = this.uiManager.addVideoStream(stream, this.myUsername + " (You)", true);
-    const localVideo = localWrapper.querySelector("video");
-    this.mediaManager.setVideoElement(localVideo);
-    this.uiManager.setInitialLocalStatus(this.previewMicOff, this.previewCamOff);
-
-    this.mediaManager.setupDeviceChangeListener(this.peerManager, (type, status) => {
-      console.log(`Device ${type} ${status}`);
-      if (status === 'lost') {
-        if (type === 'video') {
-          this.uiManager.updateLocalStatus('video', true);
-          const videoBtn = document.getElementById("disablevideoButton");
-          videoBtn.classList.add("toggled-off");
-          videoBtn.querySelector("i").className = "fas fa-video-slash";
-        } else if (type === 'audio') {
-          this.uiManager.updateLocalStatus('audio', true);
-          const muteBtn = document.getElementById("muteButton");
-          muteBtn.classList.add("toggled-off");
-          muteBtn.querySelector("i").className = "fas fa-microphone-slash";
-        }
-      } else if (status === 'recovered') {
-        if (type === 'video') {
-          this.uiManager.updateLocalStatus('video', false);
-          const videoBtn = document.getElementById("disablevideoButton");
-          videoBtn.classList.remove("toggled-off");
-          videoBtn.querySelector("i").className = "fas fa-video";
-        }
+  async startMeeting() {
+    // Initialize media stream NOW with correct states from preview
+    try {
+      const stream = await this.mediaManager.initializeMedia();
+      
+      // Apply preview states to the stream immediately after initialization
+      if (this.previewMicOff) {
+        this.mediaManager.setAudioEnabled(false);
       }
-    });
+      if (this.previewCamOff) {
+        await this.mediaManager.setVideoEnabled(false);
+      }
+      
+      // Now setup meeting UI and controls
+      this.setupMeetingControls();
+      this.updateMeetingTime();
+      this.startTimeUpdater();
+      this.applyPreviewState();
+      
+      const localWrapper = this.uiManager.addVideoStream(stream, this.myUsername + " (You)", true);
+      const localVideo = localWrapper.querySelector("video");
+      this.mediaManager.setVideoElement(localVideo);
+      this.uiManager.setInitialLocalStatus(this.previewMicOff, this.previewCamOff);
 
-    this.socketManager.emit("join-room", this.roomId, this.myUsername, {
-      audio: this.previewMicOff,
-      video: this.previewCamOff
-    });
+      this.mediaManager.setupDeviceChangeListener(this.peerManager, (type, status) => {
+        console.log(`Device ${type} ${status}`);
+        if (status === 'lost') {
+          if (type === 'video') {
+            this.uiManager.updateLocalStatus('video', true);
+            const videoBtn = document.getElementById("disablevideoButton");
+            videoBtn.classList.add("toggled-off");
+            videoBtn.querySelector("i").className = "fas fa-video-slash";
+          } else if (type === 'audio') {
+            this.uiManager.updateLocalStatus('audio', true);
+            const muteBtn = document.getElementById("muteButton");
+            muteBtn.classList.add("toggled-off");
+            muteBtn.querySelector("i").className = "fas fa-microphone-slash";
+          }
+        } else if (status === 'recovered') {
+          if (type === 'video') {
+            this.uiManager.updateLocalStatus('video', false);
+            const videoBtn = document.getElementById("disablevideoButton");
+            videoBtn.classList.remove("toggled-off");
+            videoBtn.querySelector("i").className = "fas fa-video";
+          }
+        }
+      });
 
-    this.setupSocketListeners();
+      this.socketManager.emit("join-room", this.roomId, this.myUsername, {
+        audio: this.previewMicOff,
+        video: this.previewCamOff
+      });
+
+      this.setupSocketListeners();
+    } catch (error) {
+      console.error('Failed to initialize media for meeting:', error);
+      alert('Failed to access camera/microphone. Please check permissions and try again.');
+      // Could redirect back to preview or handle error appropriately
+    }
   }
 
   updateMeetingTime() {
