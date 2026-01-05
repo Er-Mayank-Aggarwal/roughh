@@ -1137,16 +1137,27 @@ class MeetingController {
   }
 
   leaveMeeting() {
-    const confirmLeave = confirm("Are you sure you want to leave?");
-    if (!confirmLeave) return;
+    const overlay = document.getElementById("leave-popup-overlay");
+    overlay.classList.add("show");
 
-    this.peerManager.closeAllPeers();
-    this.mediaManager.stopAllTracks();
-    this.socketManager.removeAllListeners();
-    this.userManager.clear();
-    this.socket.disconnect();
-    
-    window.location = "about:blank";
+    document.getElementById("leave-cancel").onclick = () => {
+      overlay.classList.remove("show");
+    };
+
+    document.getElementById("leave-confirm").onclick = () => {
+      this.peerManager.closeAllPeers();
+      this.mediaManager.stopAllTracks();
+      this.socketManager.removeAllListeners();
+      this.userManager.clear();
+      this.socket.disconnect();
+      window.location = "about:blank";
+    };
+
+    overlay.onclick = (e) => {
+      if (e.target === overlay) {
+        overlay.classList.remove("show");
+      }
+    };
   }
 
   async init() {
