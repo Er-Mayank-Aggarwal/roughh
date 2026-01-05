@@ -1,6 +1,21 @@
 
 const CONFIG = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    // Free TURN servers for restrictive networks that block UDP
+    {
+      urls: [
+        "turn:openrelay.metered.ca:80",
+        "turn:openrelay.metered.ca:443"
+      ],
+      username: "openrelayproject",
+      credential: "openrelayproject"
+    }
+  ],
+  iceTransportPolicy: "all", // Try direct connection first, then relay
+  bundlePolicy: "max-bundle",
+  rtcpMuxPolicy: "require",
   mediaConstraints: {
     video: { 
       width: { ideal: 320, max: 640 }, 
@@ -429,9 +444,11 @@ class PeerConnectionManager {
     this.config = config;
     this.peers = new Map();
     this.peerStates = new Map();
+    this.iceCandidateBuffer = new Map(); // Buffer candidates until remote description is set
     this.onTrackCallback = onTrack;
     this.onIceCandidateCallback = onIceCandidate;
     this.localSocketId = null;
+    this.connectionTimeouts = new Map(); // Track connection timeouts for recovery
   }
 
   setLocalSocketId(socketId) {
@@ -450,7 +467,13 @@ class PeerConnectionManager {
 
     const pc = new RTCPeerConnection(this.config);
     this.peers.set(userId, pc);
-    this.peerStates.set(userId, { makingOffer: false, ignoreOffer: false });
+    this.peerStates.set(userId, { 
+      makingOffer: false, 
+      ignoreOffer: false, 
+      iceRestarts: 0, 
+      maxIceRestarts: 3 
+    });
+    this.iceCandidateBuffer.set(userId, []); // Initialize candidate buffer
 
     if (stream) {
       stream.getTracks().forEach(track => {
@@ -478,15 +501,49 @@ class PeerConnectionManager {
 
     pc.onconnectionstatechange = () => {
       console.log(`Peer ${userId} connection state: ${pc.connectionState}`);
-      if (pc.connectionState === 'failed') {
-        pc.restartIce();
+      
+      if (pc.connectionState === 'connected') {
+        // Clear timeout when connected
+        if (this.connectionTimeouts.has(userId)) {
+          clearTimeout(this.connectionTimeouts.get(userId));
+          this.connectionTimeouts.delete(userId);
+        }
+      } else if (pc.connectionState === 'failed') {
+        const state = this.peerStates.get(userId);
+        if (state && state.iceRestarts < state.maxIceRestarts) {
+          state.iceRestarts++;
+          console.log(`ICE restart attempt ${state.iceRestarts}/${state.maxIceRestarts} for peer ${userId}`);
+          pc.restartIce();
+        } else {
+          console.error(`Max ICE restart attempts reached for peer ${userId}`);
+        }
+      } else if (pc.connectionState === 'disconnected') {
+        // Set timeout to attempt recovery after 30s of disconnection
+        if (!this.connectionTimeouts.has(userId)) {
+          const timeout = setTimeout(() => {
+            console.warn(`Peer ${userId} disconnected for 30s, attempting ICE restart`);
+            if (pc.connectionState === 'disconnected') {
+              pc.restartIce();
+            }
+          }, 30000);
+          this.connectionTimeouts.set(userId, timeout);
+        }
       }
     };
 
     pc.oniceconnectionstatechange = () => {
+      console.log(`Peer ${userId} ICE state: ${pc.iceConnectionState}`);
       if (pc.iceConnectionState === 'failed') {
-        pc.restartIce();
+        const state = this.peerStates.get(userId);
+        if (state && state.iceRestarts < state.maxIceRestarts) {
+          state.iceRestarts++;
+          pc.restartIce();
+        }
       }
+    };
+
+    pc.onicegatheringstatechange = () => {
+      console.log(`Peer ${userId} ICE gathering state: ${pc.iceGatheringState}`);
     };
 
     return pc;
@@ -538,6 +595,8 @@ class PeerConnectionManager {
 
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      // Flush buffered ICE candidates now that remote description is set
+      await this.flushIceCandidates(userId);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       return answer;
@@ -553,6 +612,8 @@ class PeerConnectionManager {
 
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      // Flush buffered ICE candidates now that remote description is set
+      await this.flushIceCandidates(userId);
     } catch (error) {
       console.error(`Failed to handle answer from ${userId}:`, error);
     }
@@ -563,10 +624,44 @@ class PeerConnectionManager {
     if (!pc) return;
 
     try {
+      // If remote description not yet set, buffer the candidate for later
+      if (pc.remoteDescription === null) {
+        console.log(`Buffering ICE candidate for ${userId} (remote description not yet set)`);
+        const buffer = this.iceCandidateBuffer.get(userId) || [];
+        buffer.push(candidate);
+        this.iceCandidateBuffer.set(userId, buffer);
+        return;
+      }
+      
       await pc.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (error) {
-      console.error(`Failed to add ICE candidate for ${userId}:`, error);
+      // Ignore "known error" for duplicate or late candidates
+      if (error.name === 'OperationError') {
+        console.warn(`ICE candidate error for ${userId}: ${error.message}`);
+      } else {
+        console.error(`Failed to add ICE candidate for ${userId}:`, error);
+      }
     }
+  }
+
+  async flushIceCandidates(userId) {
+    const pc = this.peers.get(userId);
+    if (!pc) return;
+    
+    const buffer = this.iceCandidateBuffer.get(userId) || [];
+    if (buffer.length === 0) return;
+    
+    console.log(`Flushing ${buffer.length} buffered ICE candidates for ${userId}`);
+    
+    for (const candidate of buffer) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (error) {
+        console.warn(`Failed to add buffered ICE candidate for ${userId}:`, error.message);
+      }
+    }
+    
+    this.iceCandidateBuffer.set(userId, []);
   }
 
   updateTrackEnabled(kind, enabled) {
@@ -649,6 +744,13 @@ class PeerConnectionManager {
       pc.close();
       this.peers.delete(userId);
       this.peerStates.delete(userId);
+      this.iceCandidateBuffer.delete(userId);
+      
+      // Clear any pending timeout
+      if (this.connectionTimeouts.has(userId)) {
+        clearTimeout(this.connectionTimeouts.get(userId));
+        this.connectionTimeouts.delete(userId);
+      }
     }
   }
 
@@ -658,6 +760,11 @@ class PeerConnectionManager {
     });
     this.peers.clear();
     this.peerStates.clear();
+    this.iceCandidateBuffer.clear();
+    
+    // Clear all pending timeouts
+    this.connectionTimeouts.forEach(timeout => clearTimeout(timeout));
+    this.connectionTimeouts.clear();
   }
 }
 
